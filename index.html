@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tugas 3</title>
+    <meta http-equiv="content-type" content="text/html" charset="ISO-8859-1">
+
+    <script type="text/javascript" src="gl-matrix-min.js"></script>
+    
+    <script id="shader-fs" type="x-shader/x-fragment">
+        precision mediump float;
+
+        varying vec2 vTextureCoord;
+        varying vec3 vLightWeighting;
+        varying vec4 vColor;
+
+        uniform float uAlpha;
+
+        uniform sampler2D uSampler;
+        void main(void) {
+            gl_FragColor = vColor + vec4(texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t)).rgb * vLightWeighting, texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t)).a * uAlpha);
+        }
+    </script>
+
+    <script id="shader-vs" type="x-shader/x-vertex">
+        varying vec2 vTextureCoord;
+        varying vec3 vLightWeighting;
+        varying vec4 vColor;
+
+        attribute vec4 aVertexColor;
+        attribute vec3 aVertexPosition;
+        attribute vec3 aVertexNormals;
+        attribute vec2 aTextureCoord;
+
+        uniform mat3 uNMatrix;
+        uniform mat4 uMVMatrix;
+        uniform mat4 uPMatrix;
+
+        uniform vec3 uAmbientColor;
+        uniform vec3 uPointLightingLocation;
+        uniform vec3 uPointLightingColor;
+
+        uniform bool uUseLighting;
+
+        uniform float uShininess;
+        void main(void) {
+            gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+            vTextureCoord = aTextureCoord;
+            vColor = aVertexColor;
+            if (!uUseLighting) {
+                vLightWeighting = vec3(1.0, 1.0, 1.0);
+            }
+            else {
+                vec3 lightDirection = normalize(uPointLightingLocation - (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz);
+                vec3 transformedNormal = uNMatrix * aVertexNormals;
+                float res = dot(transformedNormal, lightDirection);
+                if (res < 0.0) res = -res;
+                float directionalLightWeighting = max(pow(res, uShininess), 0.0);
+                vLightWeighting = uAmbientColor + uPointLightingColor * directionalLightWeighting;
+            }
+        }
+    </script>
+</head>
+<body>
+    <canvas id='mycanvas' style="border: none" width="1280" height="620" />
+    <script>
+        var gl
+        var shaderProgram
+        var mvMatrix1 = mat4.create()
+        var mvMatrix2 = mat4.create()
+        var mvMatrix3 = mat4.create()
+        var mvMatrix4 = mat4.create()
+
+        var pMatrix1 = mat4.create()
+        var pMatrix2 = mat4.create()
+        var pMatrix3 = mat4.create()
+        var pMatrix4 = mat4.create()
+
+        var mvMatrixStack1 = []        
+        var mvMatrixStack2 = []
+        var mvMatrixStack3 = []
+        var mvMatrixStack4 = []
+
+        var modelBuffer = []
+
+        var eventAfter = new CustomEvent('after')
+        var eventPointLight = new CustomEvent('point-light')
+
+        var revTranslate = [0.0, 0.0, 0.0];
+        var revRotate = 0;
+
+        function getShader(gl, id) {
+            var shaderScript = document.getElementById(id)
+            if (!shaderScript) {
+              return null
+            }
+            var str = ''
+            var k = shaderScript.firstChild
+            while(k) {
+                if(k.nodeType === 3){
+                    str += k.textContent
+                }
+                k = k.nextSibling
+            }
+            var shader
+            if (shaderScript.type == 'x-shader/x-fragment'){
+                shader = gl.createShader(gl.FRAGMENT_SHADER)
+            } else if ( shaderScript.type == 'x-shader/x-vertex') {
+                shader = gl.createShader(gl.VERTEX_SHADER)
+            } else {
+                return null
+            }
+            gl.shaderSource(shader, str)
+            gl.compileShader(shader)
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                alert(gl.getShaderInfoLog(shader))
+                return null
+            }
+            return shader
+        }
+
+        function initShaders() {
+            var fragmentShader = getShader(gl, 'shader-fs')
+            var vertexShader = getShader(gl, 'shader-vs')
+
+            shaderProgram = gl.createProgram()
+            gl.attachShader(shaderProgram, vertexShader)
+            gl.attachShader(shaderProgram, fragmentShader)
+            gl.linkProgram(shaderProgram)
+
+            if ( !gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Tidak bisa menginisialisasi Shader")
+            }
+
+            gl.useProgram(shaderProgram)
+
+            shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor")
+            gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute)
+           
+            shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition")
+            gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute)
+
+            shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord")
+            gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute)
+
+            shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormals")
+            gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute)
+
+            shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix")
+            shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix")
+            shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix")
+            shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler")
+            shaderProgram.useLightingUniform = gl.getUniformLocation(shaderProgram, "uUseLighting")
+            shaderProgram.ambientColorUniform = gl.getUniformLocation(shaderProgram, "uAmbientColor")
+            shaderProgram.lightingDirectionUniform = gl.getUniformLocation(shaderProgram, "uLightingDirection")
+            shaderProgram.pointLightingLocationUniform = gl.getUniformLocation(shaderProgram, "uPointLightingLocation")
+            shaderProgram.pointLightingColorUniform = gl.getUniformLocation(shaderProgram, "uPointLightingColor")
+            shaderProgram.alphaUniform = gl.getUniformLocation(shaderProgram, "uAlpha")
+            shaderProgram.shiniUniform = gl.getUniformLocation(shaderProgram, "uShininess")
+        }
+
+        function handleLoadedTexture(textures) {
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBgl, true)
+            gl.bindTexture(gl.TEXTURE_2D, textures)
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures.image)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+            textures.loaded = true
+        }
+
+        function mvPushMatrix(x) {
+            var copy = mat4.create()
+            var mvMatrix, mvMatrixStack
+            if (x==1) {
+                mvMatrix=mvMatrix1
+                mvMatrixStack=mvMatrixStack1
+            }
+            else if (x==2) {
+                mvMatrix=mvMatrix2
+                mvMatrixStack=mvMatrixStack2
+            }
+            else if (x==3) {
+                mvMatrix=mvMatrix3
+                mvMatrixStack=mvMatrixStack3
+            }
+            else if (x==4) {
+                mvMatrix=mvMatrix4
+                mvMatrixStack=mvMatrixStack4
+            }
+            mat4.copy(copy, mvMatrix)
+            mvMatrixStack.push(copy)
+        }
+
+        function mvPopMatrix(x) {
+            var mvMatrixStack
+            if (x==1) {
+                mvMatrixStack = mvMatrixStack1
+                mvMatrix1 = mvMatrixStack.pop()
+            }
+            else if (x==2) {
+                mvMatrixStack = mvMatrixStack2
+                mvMatrix2 = mvMatrixStack.pop()
+            }
+            else if (x==3) {
+                mvMatrixStack = mvMatrixStack3
+                mvMatrix3 = mvMatrixStack.pop()
+            }
+            else if (x==4) {
+                mvMatrixStack = mvMatrixStack4
+                mvMatrix4 = mvMatrixStack.pop()
+            }
+        }
+
+        function setMatrixUniforms(x) {
+            var normalMatrix = mat3.create()
+            var mvMatrix, pMatrix
+            if (x==1) {
+                mvMatrix = mvMatrix1
+                pMatrix = pMatrix1
+            }
+            else if (x==2) {
+                mvMatrix = mvMatrix2
+                pMatrix = pMatrix2
+            }
+            else if (x==3) {
+                mvMatrix = mvMatrix3
+                pMatrix = pMatrix3
+            }
+            else if (x==4) {
+                mvMatrix = mvMatrix4
+                pMatrix = pMatrix4
+            }
+            mat3.normalFromMat4(normalMatrix, mvMatrix)
+            gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix)
+            gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix)
+            gl.uniformMatrix3fv(shaderProgram.nMatrixUniform, false, normalMatrix)
+        }
+
+        function createModel(model) {
+            var buffer = {}
+            if(model.type === 'geo') {
+                buffer.id = model.id
+                buffer.model2 = model
+                buffer.position = gl.createBuffer()
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer.position)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(model.vertices), gl.STATIC_DRAW)
+                buffer.position.itemSize = 3
+                buffer.position.numItems = model.vertices.length / buffer.position.itemSize
+
+                buffer.normal = gl.createBuffer()
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer.normal)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(model.normals), gl.STATIC_DRAW)
+                buffer.normal.itemSize = 3
+                buffer.normal.numItems = model.normals.length / buffer.normal.itemSize
+
+                buffer.indices = gl.createBuffer()
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer.indices)
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(model.indices), gl.STATIC_DRAW)
+                buffer.indices.itemSize = 1
+                buffer.indices.numItems = model.indices.length / buffer.indices.itemSize
+
+                if(model.textureSrc !== undefined) {
+                    buffer.texture = gl.createTexture()
+                    buffer.texture.loaded = false
+                    buffer.texture.image = new Image()
+                    buffer.texture.image.onload = function () {
+                        handleLoadedTexture(buffer.texture)
+                    }
+                    buffer.texture.image.src = model.textureSrc
+                } else {
+                    buffer.texture = gl.createTexture()
+                    buffer.texture.loaded = true
+                    buffer.texture.image = new Image()
+                }
+
+                buffer.textureCoord = gl.createBuffer()
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer.textureCoord)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(model.textureCoord), gl.STATIC_DRAW)
+                buffer.textureCoord.itemSize = 2
+                buffer.textureCoord.numItems = model.textureCoord.length / buffer.textureCoord.itemSize
+
+                buffer.color = gl.createBuffer()
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer.color)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(model.colors), gl.STATIC_DRAW)
+                buffer.color.itemSize = 4
+                buffer.color.numItems = model.colors.length / buffer.color.itemSize
+
+                modelBuffer.push(buffer)
+            } else {
+                gl.uniform1i(shaderProgram.useLightingUniform, 1)
+                gl.uniform1f(shaderProgram.shiniUniform, 8.0)
+                buffer.model2 = model;
+                modelBuffer.push(buffer)
+            }
+        }
+
+        function drawScene(){
+            gl.enable(gl.SCISSOR_TEST);
+            for(let i = 0; i < 2; i++){
+                for(let j = 0; j < 2; j++){
+                    if(i==0 && j==0){
+                        first_frame(0 * gl.viewportWidth / 2, 1 * gl.viewportHeight / 2, gl.viewportWidth / 2, gl.viewportHeight / 2)
+                    }
+                    if(i==0 && j==1){
+                        second_frame(1 * gl.viewportWidth / 2, 1 * gl.viewportHeight / 2, gl.viewportWidth / 2, gl.viewportHeight / 2)
+                    }
+                    if(i==1 && j==0){
+                        third_frame(0 * gl.viewportWidth / 2, 0 * gl.viewportHeight / 2, gl.viewportWidth / 2, gl.viewportHeight / 2)
+                    }
+                    if(i==1 && j==1){
+                        fourth_frame(1 * gl.viewportWidth / 2, 0 * gl.viewportHeight / 2, gl.viewportWidth / 2, gl.viewportHeight / 2)
+                    }
+                }
+            }
+        }
+
+        function first_frame(sw, sh, ew, eh) {
+            gl.scissor(sw, sh, ew, eh)
+            gl.viewport(sw, sh, ew, eh)
+            gl.clear(gl.COLOR_BUFFER_BIT, gl.DEPTH_BUFFER_BIT)
+            mat4.perspective(pMatrix1, glMatrix.toRadian(45), gl.viewportWidth/gl.viewportHeight, 0.1, 1000.0)
+            mat4.identity(mvMatrix1)
+            mat4.translate(mvMatrix1, mvMatrix1, [0.0, 0.0,-50.0])
+            for(var i = 0; i < modelBuffer.length; i++) {
+                mvPushMatrix(1)
+                var o = modelBuffer[i]
+                if(o.model2.type === 'geo') {
+                    var e = new CustomEvent(o.id)
+                    document.dispatchEvent(e)
+                    mat4.multiply(mvMatrix1, mvMatrix1, o.model2.matrixWorld)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.position)
+                    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, o.position.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.color)
+                    gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, o.color.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.normal)
+                    gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, o.normal.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.textureCoord)
+                    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, o.textureCoord.itemSize, gl.FLOAT, false, 0, 0)
+                    if(o.textureSrc !== undefined){
+                        gl.activeTexture(gl.TEXTURE0)
+                        gl.bindTexture(gl.TEXTURE_2D, o.texture)
+                        gl.uniform1i(shaderProgram.samplerUniform, 0)
+                    }
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.indices)
+                    var temp = []
+                    for(let i = 0; i < o.model2.vertices2.length; i++){
+                        temp.push(multiply(mvMatrix1, o.model2.vertices2[i]))
+                    }
+                    o.model2.position = JSON.parse(JSON.stringify(temp))
+                    setMatrixUniforms(1)
+                    gl.drawElements(gl.TRIANGLES, o.indices.numItems, gl.UNSIGNED_SHORT, 0)
+                } else if (o.model2.type === 'ambient-light') {
+                    gl.uniform3f(shaderProgram.ambientColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                } else if (o.model2.type === 'point-light') {
+                    document.dispatchEvent(eventPointLight)
+                    gl.uniform3f(shaderProgram.pointLightingLocationUniform, o.model2.position.x, o.model2.position.y, o.model2.position.z)
+                    gl.uniform3f(shaderProgram.pointLightingColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                }
+                mvPopMatrix(1)
+            }
+            document.dispatchEvent(eventAfter)
+        }
+
+        function second_frame(sw, sh, ew, eh) {
+            gl.scissor(sw, sh, ew, eh)
+            gl.viewport(sw, sh, ew, eh)
+            gl.clear(gl.COLOR_BUFFER_BIT, gl.DEPTH_BUFFER_BIT)
+            mat4.perspective(pMatrix2, glMatrix.toRadian(45), gl.viewportWidth/gl.viewportHeight, 0.1, 1000.0)
+            mat4.identity(mvMatrix2)
+            mat4.translate(mvMatrix2, mvMatrix2, [0.0, 0.0,-50.0])
+            document.addEventListener('right-click', function(){
+                theta = 0
+                phi = 0
+            });
+            mat4.rotateY(mvMatrix2, mvMatrix2, theta)
+            mat4.rotateX(mvMatrix2, mvMatrix2, phi)
+            for(var i = 0; i < modelBuffer.length; i++) {
+                mvPushMatrix(2)
+                var o = modelBuffer[i]
+                if(o.model2.type === 'geo') {
+                    mat4.multiply(mvMatrix2, mvMatrix2, o.model2.matrixWorld)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.position)
+                    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, o.position.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.color)
+                    gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, o.color.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.normal)
+                    gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, o.normal.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.textureCoord)
+                    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, o.textureCoord.itemSize, gl.FLOAT, false, 0, 0)
+                    if(o.textureSrc !== undefined){
+                        gl.activeTexture(gl.TEXTURE0)
+                        gl.bindTexture(gl.TEXTURE_2D, o.texture)
+                        gl.uniform1i(shaderProgram.samplerUniform, 0)
+                    }
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.indices)
+                    var temp = []
+                    for(let i = 0; i < o.model2.vertices2.length; i++){
+                        temp.push(multiply(mvMatrix2, o.model2.vertices2[i]))
+                    }
+                    o.model2.position = JSON.parse(JSON.stringify(temp))
+                    setMatrixUniforms(2)
+                    gl.drawElements(gl.TRIANGLES, o.indices.numItems, gl.UNSIGNED_SHORT, 0)
+                } else if (o.model2.type === 'ambient-light') {
+                    gl.uniform3f(shaderProgram.ambientColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                } else if (o.model2.type === 'point-light') {
+                    document.dispatchEvent(eventPointLight)
+                    gl.uniform3f(shaderProgram.pointLightingLocationUniform, o.model2.position.x, o.model2.position.y, o.model2.position.z)
+                    gl.uniform3f(shaderProgram.pointLightingColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                }
+                mvPopMatrix(2)
+            }
+            document.dispatchEvent(eventAfter)
+        }
+
+        function third_frame(sw, sh, ew, eh) {
+            gl.scissor(sw, sh, ew, eh)
+            gl.viewport(sw, sh, ew, eh)
+            gl.clear(gl.COLOR_BUFFER_BIT, gl.DEPTH_BUFFER_BIT)
+            mat4.perspective(pMatrix3, glMatrix.toRadian(45), gl.viewportWidth/gl.viewportHeight, 0.1, 1000.0)
+            mat4.identity(mvMatrix3)
+           
+            for(var i = 0; i < modelBuffer.length; i++) {
+                mvPushMatrix(3)
+                var o = modelBuffer[i]
+                if(i == 1) continue
+                if(o.model2.type === 'geo') {
+                    mat4.multiply(mvMatrix2, mvMatrix2, o.model2.matrixWorld)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.position)
+                    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, o.position.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.color)
+                    gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, o.color.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.normal)
+                    gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, o.normal.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.textureCoord)
+                    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, o.textureCoord.itemSize, gl.FLOAT, false, 0, 0)
+                    if(o.textureSrc !== undefined){
+                        gl.activeTexture(gl.TEXTURE0)
+                        gl.bindTexture(gl.TEXTURE_2D, o.texture)
+                        gl.uniform1i(shaderProgram.samplerUniform, 0)
+                    }
+                    revTranslate[0] += (-window.dir[0])*0.1;
+                    revTranslate[1] += (-window.dir[1])*0.1;
+                    revTranslate[2] += (-window.dir[2])*0.1;
+                    revRotate = revRotate + (-window.rotater*0.5);
+                    var tempMat = Object.assign([], o.model2.matrixWorld);
+                    
+                    mat4.rotate(tempMat, tempMat, glMatrix.toRadian(revRotate), [0, 0, -1]);
+            mat4.translate(tempMat, tempMat, [-revTranslate[0], revTranslate[2], -revTranslate[1]])
+            mat4.multiply(mvMatrix3, mvMatrix3, tempMat );
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.indices)
+            var temp = [];
+            for(var i = 0; i < o.model2.vertices2.length; i++){
+                temp.push(multiply(mvMatrix3, o.model2.vertices2[i]));
+            }
+            o.model2.position = JSON.parse(JSON.stringify(temp));
+            setMatrixUniforms(3)
+            gl.drawElements(gl.TRIANGLES, o.indices.numItems, gl.UNSIGNED_SHORT, 0);
+        } 
+        else {
+            lightningToBuffer(o);
+        }
+        mvPopMatrix(3);
+    }
+        }
+        var cameraAngle = 0
+
+        function fourth_frame(sw, sh, ew, eh) {
+            gl.scissor(sw, sh, ew, eh)
+            gl.viewport(sw, sh, ew, eh)
+            gl.clear(gl.COLOR_BUFFER_BIT, gl.DEPTH_BUFFER_BIT)
+            mat4.perspective(pMatrix4, glMatrix.toRadian(45), gl.viewportWidth/gl.viewportHeight, 0.1, 1000.0)
+            mat4.identity(mvMatrix4)
+            mat4.translate(mvMatrix4, mvMatrix4, [0.0, 0.0, 0.0])
+            var cameraMatrix = mat4.create(), viewMatrix = mat4.create();
+            mat4.rotateY(cameraMatrix, cameraMatrix, cameraAngle);
+            mat4.translate(cameraMatrix, cameraMatrix, [0, 0, 50]);            
+            mat4.invert(viewMatrix,cameraMatrix);
+            mat4.multiply(pMatrix4, pMatrix4,  viewMatrix);
+            for(var i = 0; i < modelBuffer.length; i++) {
+                mvPushMatrix(4)
+                var o = modelBuffer[i]
+                if(o.model2.type === 'geo') {
+                    mat4.multiply(mvMatrix4, mvMatrix4, o.model2.matrixWorld)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.position)
+                    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, o.position.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.color)
+                    gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, o.color.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.normal)
+                    gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, o.normal.itemSize, gl.FLOAT, false, 0, 0)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, o.textureCoord)
+                    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, o.textureCoord.itemSize, gl.FLOAT, false, 0, 0)
+                    if(o.textureSrc !== undefined){
+                        gl.activeTexture(gl.TEXTURE0)
+                        gl.bindTexture(gl.TEXTURE_2D, o.texture)
+                        gl.uniform1i(shaderProgram.samplerUniform, 0)
+                    }
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.indices)
+                    var temp = []
+                    for(let i = 0; i < o.model2.vertices2.length; i++){
+                        temp.push(multiply(mvMatrix4, o.model2.vertices2[i]))
+                    }
+                    o.model2.position = JSON.parse(JSON.stringify(temp))
+                    setMatrixUniforms(4)
+                    gl.drawElements(gl.TRIANGLES, o.indices.numItems, gl.UNSIGNED_SHORT, 0)
+                } else if (o.model2.type === 'ambient-light') {
+                    gl.uniform3f(shaderProgram.ambientColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                } else if (o.model2.type === 'point-light') {
+                    document.dispatchEvent(eventPointLight)
+                    gl.uniform3f(shaderProgram.pointLightingLocationUniform, o.model2.position.x, o.model2.position.y, o.model2.position.z)
+                    gl.uniform3f(shaderProgram.pointLightingColorUniform, o.model2.color.r, o.model2.color.g, o.model2.color.b)
+                }
+                mvPopMatrix(4)
+            }
+            cameraAngle += 0.02;
+        }
+
+        function Geo(){
+            this.id = btoa(Math.random()).substring(0,12)
+            this.matrixWorld = mat4.create()
+            this.temporaryMatrixWorld = undefined
+            this.rotation = {
+                x2 : 0,
+                y2 : 0,
+                z2 : 0,
+                updateMatrixWorld : function(deg, array) {
+                    mat4.rotate(this.matrixWorld, this.matrixWorld, glMatrix.toRadian(deg), array)
+                }.bind(this)
+            }
+            Object.defineProperties(this.rotation, {
+                x : {
+                    get : function () {
+                        return this.x2
+                    },
+                    set: function (value) {
+                        this.x2 = value
+                        this.updateMatrixWorld(this.x2, [1, 0, 0])
+                    }
+                },
+                y : {
+                    get : function () {
+                        return this.y2
+                    },
+                    set: function (value) {
+                        this.y2 = value
+                        this.updateMatrixWorld(this.y2, [0, 1, 0])
+                    }
+                },
+                z : {
+                    get : function () {
+                        return this.z2
+                    },
+                    set: function (value) {
+                        this.z2 = value
+                        this.updateMatrixWorld(this.z2, [0, 0, 1])
+                    }
+                },
+            })
+            this.translate = {
+                to : [0, 0, 0],
+                updateMatrixWorld : function() {
+                    mat4.translate(this.matrixWorld, this.matrixWorld, this.translate.to)
+                }.bind(this)
+            }
+            Object.defineProperties(this.translate,{
+                mat : {
+                    get : function () {
+                        return this.to
+                    },
+                    set : function (value) {
+                        this.to = value
+                        this.updateMatrixWorld()
+                    },
+                },
+            })
+
+            this.move = {
+                direction : [0, 0, 0],
+                vector : function(value) {
+                    this.direction[0] += value[0]
+                    this.direction[1] += value[1]
+                    this.direction[2] += value[2]
+                    this.updateMatrixWorld()
+                },
+                updateMatrixWorld : function() {
+                    mat4.translate(this.matrixWorld, this.matrixWorld, this.move.direction)
+                }.bind(this)
+            }
+
+        }
+
+        function BoxGeo(depth, width, height, step = 1){
+            Geo.call(this)
+            this.type = 'geo'
+            this.indices = []
+            this.vertices = []
+            this.vertices2 = []
+            this.normals = []
+            this.colors = []
+            this.textureCoord = []
+            this.textureSrc = undefined
+            this.position = []
+
+            this.step = step
+
+            var d = depth / 2
+            var w = width / 2
+            var h = height / 2
+
+            var counter = 0
+            for(var i = 0; i < 6; i+=step, counter++){
+                for(var j = 0; j < 4; j++){
+                    var x = d, y = w, z = h
+                    if(i & 4){
+                        x *= (i&1)? -1 : 1
+                        y *= (j&2)? 1 : -1
+                        z *= (j&1)? 1 : -1
+                        this.normals.push(1.0, 0, 0)
+                    } else if ( i & 2) {
+                        x *= (j&2)? 1 : -1
+                        y *= (i&1)? -1 : 1
+                        z *= (j&1)? 1 : -1                        
+                        this.normals.push(0, 1.0, 0)
+                    } else {
+                        x *= (j&2)? 1 : -1
+                        y *= (j&1)? 1 : -1
+                        z *= (i&1)? -1 : 1
+                        this.normals.push(0, 0, 1.0)
+                    }
+                    this.vertices.push(x, y, z)
+                    this.colors.push(0.0, 0.0, 0.0, 1.0)
+                }
+                var p = counter * 4
+                var q = counter * 4 + 1
+                var r = counter * 4 + 2
+                var s = counter * 4 + 3
+                this.indices.push(p, q, r)
+                this.indices.push(q, r, s)
+            }
+
+            for(var i = 0; i < 6 / 3; i++, counter++){
+                for(var j = 0; j < 4; j++){
+                    var x = d, y = w, z = h
+                    if ( i & 2) {
+                        x *= (j&2)? 1 : -1
+                        y *= (i&1)? -1 : 1
+                        z *= (j&1)? 1 : -1
+                    } else {
+                        x *= (j&2)? 1 : -1
+                        y *= (j&1)? 1 : -1
+                        z *= (i&1)? -1 : 1
+                    }
+                    this.vertices2.push([x, y, z, 1.0]);
+                    this.position.push([x, y, z, 1.0]);
+                }
+            }
+        }
+
+        function huruf() {
+            Geo.call(this)
+            this.type = 'geo'
+            var color = new Color("0xd76985")
+        this.vertices = [
+             // Front face
+          -0.2*3, -1.0*3,  0.3*3,
+          0.2*3, -1.0*3,  0.3*3,
+          0.2*3,  1.0*3,  0.3*3,
+          -0.2*3,  1.0*3,  0.3*3,
+
+          // Back face
+          -0.2*3, -1.0*3, -0.3*3,
+          -0.2*3,  1.0*3, -0.3*3,
+          0.2*3,  1.0*3, -0.3*3,
+          0.2*3, -1.0*3, -0.3*3,
+
+          // Top face
+          -0.4*3,  1.0*3, -0.3*3,
+          -0.4*3,  1.0*3,  0.3*3,
+          0.4*3,  1.0*3,  0.3*3,
+          0.4*3,  1.0*3, -0.3*3,
+
+          // Bottom face
+          -0.4*3, -1.0*3, -0.3*3,
+          0.4*3, -1.0*3, -0.3*3,
+          0.4*3, -1.0*3,  0.3*3,
+          -0.4*3, -1.0*3,  0.3*3,
+
+          // Right face
+          0.2*3, -1.0*3, -0.3*3,
+          0.2*3,  1.0*3, -0.3*3,
+          0.2*3,  1.0*3,  0.3*3,
+          0.2*3, -1.0*3,  0.3*3,
+
+          // Left face
+          -0.2*3, -1.0*3, -0.3*3,
+          -0.2*3, -1.0*3,  0.3*3,
+          -0.2*3,  1.0*3,  0.3*3,
+          -0.2*3,  1.0*3, -0.3*3,
+
+          // Bottom bawah 1
+          -0.4*3, -1.3*3, -0.3*3,
+          0.4*3, -1.3*3, -0.3*3,
+          0.4*3, -1.3*3,  0.3*3,
+          -0.4*3, -1.3*3,  0.3*3,
+
+          // Right bottom
+          0.4*3, -1.3*3, -0.3*3,
+          0.4*3,  -1.0*3, -0.3*3,
+          0.4*3, -1.0*3,  0.3*3,
+          0.4*3, -1.3*3,  0.3*3,
+
+          // left bottom
+          -0.4*3, -1.3*3, -0.3*3,
+          -0.4*3,  -1.0*3, -0.3*3,
+          -0.4*3, -1.0*3,  0.3*3,
+          -0.4*3, -1.3*3,  0.3*3,
+
+          // Front bottom face
+          -0.4*3, -1.3*3,  0.3*3,
+          0.4*3, -1.3*3,  0.3*3,
+          0.4*3,  -1.0*3,  0.3*3,
+          -0.4*3,  -1.0*3,  0.3*3,
+
+          // Back bottom face
+          -0.4*3, -1.3*3,  -0.3*3,
+          0.4*3, -1.3*3,  -0.3*3,
+          0.4*3,  -1.0*3,  -0.3*3,
+          -0.4*3,  -1.0*3,  -0.3*3,
+
+          // Top atas 1
+          -0.4*3, 1.3*3, -0.3*3,
+          0.4*3, 1.3*3, -0.3*3,
+          0.4*3, 1.3*3,  0.3*3,
+          -0.4*3, 1.3*3,  0.3*3,
+
+          // Right top
+          0.4*3, 1.3*3, -0.3*3,
+          0.4*3,  1.0*3, -0.3*3,
+          0.4*3, 1.0*3,  0.3*3,
+          0.4, 1.3*3,  0.3*3,
+
+          // left top
+          -0.4*3, 1.3*3, -0.3*3,
+          -0.4*3,  1.0*3, -0.3*3,
+          -0.4*3, 1.0*3,  0.3*3,
+          -0.4*3, 1.3*3,  0.3*3,
+
+          // Front top 
+          -0.4*3, 1.3*3,  0.3*3,
+          0.4*3, 1.3*3,  0.3*3,
+          0.4*3, 1.0*3,  0.3*3,
+          -0.4*3, 1.0*3,  0.3*3,
+
+          // Back top 
+          -0.4*3, 1.3*3,  -0.3*3,
+          0.4*3, 1.3*3,  -0.3*3,
+          0.4*3, 1.0*3,  -0.3*3,
+          -0.4*3, 1.0*3,  -0.3*3
+            ];
+
+        this.indices = [
+          0, 1, 2,      0, 2, 3,
+          4, 5, 6,      4, 6, 7, 
+          8, 9, 10,     8, 10, 11,
+          12, 13, 14,   12, 14, 15, 
+          16, 17, 18,   16, 18, 19, 
+          20, 21, 22,   20, 22, 23,  
+          24, 25, 26,   24, 26, 27, 
+          28, 29, 30,   28, 30, 31,
+          32, 33, 34,   32, 34, 35, 
+          36, 37, 38,   36, 38, 39, 
+          40, 41, 42,   40, 42, 43, 
+          44, 45, 46,   44, 46, 47, 
+          48, 49, 50,   48, 50, 51,
+          52, 53, 54,   52, 54, 55,
+          56, 57, 58,   56, 58, 59,
+          60, 61, 62,   60, 62, 63
+            ];
+        this.position = [
+             // Front face
+          [-0.2*3, -1.0*3,  0.3*3, 1],
+          [0.2*3, -1.0*3,  0.3*3, 1],
+          [0.2*3,  1.0*3,  0.3*3, 1],
+          [-0.2*3,  1.0*3,  0.3*3, 1],
+
+          // Back face
+          [-0.2*3, -1.0*3, -0.3*3, 1],
+          [-0.2*3,  1.0*3, -0.3*3, 1],
+          [0.2*3,  1.0*3, -0.3*3, 1],
+          [0.2*3, -1.0*3, -0.3*3, 1],
+
+          // Top face
+          [-0.4*3,  1.0*3, -0.3*3, 1],
+          [-0.4*3,  1.0*3,  0.3*3, 1],
+          [0.4*3,  1.0*3,  0.3*3, 1],
+          [0.4*3,  1.0*3, -0.3*3, 1],
+
+          // Bottom face
+          [-0.4*3, -1.0*3, -0.3*3, 1],
+          [0.4*3, -1.0*3, -0.3*3, 1],
+          [0.4*3, -1.0*3,  0.3*3, 1],
+          [-0.4*3, -1.0*3,  0.3*3, 1],
+
+          // Right face
+          [0.2*3, -1.0*3, -0.3*3, 1],
+          [0.2*3,  1.0*3, -0.3*3, 1],
+          [0.2*3,  1.0*3,  0.3*3, 1],
+          [0.2*3, -1.0*3,  0.3*3, 1],
+
+          // Left face
+          [-0.2*3, -1.0*3, -0.3*3, 1],
+          [-0.2*3, -1.0*3,  0.3*3, 1],
+          [-0.2*3,  1.0*3,  0.3*3, 1],
+          [-0.2*3,  1.0*3, -0.3*3, 1],
+
+          // Bottom bawah 1
+          [-0.4*3, -1.3*3, -0.3*3, 1],
+          [0.4*3, -1.3*3, -0.3*3, 1],
+          [0.4*3, -1.3*3,  0.3*3, 1],
+          [-0.4*3, -1.3*3,  0.3*3, 1],
+
+          // Right bottom
+          [0.4*3, -1.3*3, -0.3*3, 1],
+          [0.4*3,  -1.0*3, -0.3*3, 1],
+          [0.4*3, -1.0*3,  0.3*3, 1],
+          [0.4*3, -1.3*3,  0.3*3, 1],
+
+          // left bottom
+          [-0.4*3, -1.3*3, -0.3*3, 1],
+          [-0.4*3,  -1.0*3, -0.3*3, 1],
+          [-0.4*3, -1.0*3,  0.3*3, 1],
+          [-0.4*3, -1.3*3,  0.3*3, 1],
+
+          // Front bottom face
+          [-0.4*3, -1.3*3,  0.3*3, 1],
+          [0.4*3, -1.3*3,  0.3*3, 1],
+          [0.4*3,  -1.0*3,  0.3*3, 1],
+          [-0.4*3,  -1.0*3,  0.3*3, 1],
+
+          // Back bottom face
+          [-0.4*3, -1.3*3,  -0.3*3, 1],
+          [0.4*3, -1.3*3,  -0.3*3, 1],
+          [0.4*3,  -1.0*3,  -0.3*3, 1],
+          [-0.4*3,  -1.0*3,  -0.3*3, 1],
+
+          // Top atas 1
+          [-0.4*3, 1.3*3, -0.3*3, 1],
+          [0.4*3, 1.3*3, -0.3*3, 1],
+          [0.4*3, 1.3*3,  0.3*3, 1],
+          [-0.4*3, 1.3*3,  0.3*3, 1],
+
+          // Right top
+          [0.4*3, 1.3*3, -0.3*3, 1],
+          [0.4*3,  1.0*3, -0.3*3, 1],
+          [0.4*3, 1.0*3,  0.3*3, 1],
+          [0.4*3, 1.3*3,  0.3*3, 1],
+
+          // left top
+          [-0.4*3, 1.3*3, -0.3*3, 1],
+          [-0.4*3,  1.0*3, -0.3*3, 1],
+          [-0.4*3, 1.0*3,  0.3*3, 1],
+          [-0.4*3, 1.3*3,  0.3*3, 1],
+
+          // Front top 
+          [-0.4*3, 1.3*3,  0.3*3, 1],
+          [0.4*3, 1.3*3,  0.3*3, 1],
+          [0.4*3, 1.0*3,  0.3*3, 1],
+          [-0.4*3, 1.0*3,  0.3*3, 1],
+
+          // Back top 
+          [-0.4*3, 1.3*3,  -0.3*3, 1],
+          [0.4*3, 1.3*3,  -0.3*3, 1],
+          [0.4*3, 1.0*3,  -0.3*3, 1],
+          [-0.4*3, 1.0*3,  -0.3*3, 1]
+        ]
+            this.vertices2 = Object.assign([], this.position);
+            this.normals = []
+            this.textureCoord = []
+            for(var i = 0; i < this.vertices.length / 3; i++){
+                this.textureCoord.push(0.0, 0.0)
+            }
+            for(var i = 0; i < this.vertices.length / 6; i++){
+                this.normals.push(0.0, 0.0, 1.0)
+            }
+            for(var i = 0; i < this.vertices.length / 6; i++){
+                this.normals.push(0.0, 1.0, 0.0)
+            }
+            this.colors = []
+            for(var i = 0; i < this.vertices.length / 3; i++){
+                this.colors.push(color.r / 255, color.g / 255, color.b/ 255, 1.0)
+            }
+
+            this.textureSrc = undefined
+        }
+
+        var rotater = 1
+        var dir = [1, 1, 1]
+        var right, left, bottom, up, back, front, box, thresh
+
+        function getCenter(letter) {
+            var center = [0, 0, 0]
+            for(var i = 0; i < letter.position.length; i++){
+                center[0] += letter.position[i][0]
+                center[1] += letter.position[i][1]
+                center[2] += letter.position[i][2]
+            }
+            center[0] /= letter.position.length/2
+            center[1] /= letter.position.length/2
+            center[2] /= letter.position.length/2
+            return center
+        }
+
+        function Color(hex){
+            if(hex.charAt(0) == '0' && hex.charAt(1) === 'x'){
+                hex = hex.substr(2)
+            }
+            var values = hex.split('')
+            this.r = parseInt(values[0].toString() + values[1].toString(), 16)
+            this.g = parseInt(values[2].toString() + values[3].toString(), 16)
+            this.b = parseInt(values[4].toString() + values[5].toString(), 16)
+        }
+
+        function AmbientLight(color, intensity = 0.2) {
+            this.type = 'ambient-light'
+            this.color = {}
+            this.color.r = (color.r - 0)/255 * intensity
+            this.color.g = (color.g - 0)/255 * intensity
+            this.color.b = (color.b - 0)/255 * intensity
+        }
+
+        function PointLight(color, position) {
+            this.type = 'point-light'
+            this.color = {}
+            this.color.r = (color.r - 0)/255
+            this.color.g = (color.g - 0)/255
+            this.color.b = (color.b - 0)/255
+            this.position = position
+        }
+
+        function multiply(a,b) {
+            var c1,c2,c3,c4;
+            c1 = a[0]*b[0] + a[4]*b[1] + a[8]*b[2] + a[12]*b[3]
+            c2 = a[1]*b[0] + a[5]*b[1] + a[9]*b[2] + a[13]*b[3]
+            c3 = a[2]*b[0] + a[6]*b[1] + a[10]*b[2] + a[14]*b[3]
+            c4 = a[3]*b[0] + a[7]*b[1] + a[11]*b[2] + a[15]*b[3]
+            return [c1,c2,c3,c4]
+        }
+
+        function sideToPoint(A, B, C) {
+            var n = [], temp = [], temp2 = [], D = 0
+            temp = vec3.subtract(temp,B,A)
+            temp2= vec3.subtract(temp2,C,B)
+            n = vec3.cross(n,temp,temp2)
+            D = vec3.dot(n.map(x =>-x), A)
+            return n.concat(D)
+        }
+
+        function distance(side, point) {
+            var point2 = point;
+            var n = Math.abs(side[0]*point2[0] + side[1]*point2[1] + side[2]*point2[2] + side[3])
+            var d = Math.sqrt(side.slice(0,3).map(x => x*x).reduce((a,b) => a+b, 0))
+            var dist = n/d
+            return dist
+        }
+
+        function addCols(){
+            var point = box.position
+            back = sideToPoint(point[2], point[3], point[6])
+            front = sideToPoint(point[1], point[4], point[5])
+            right = sideToPoint(point[1], point[3], point[5])
+            left = sideToPoint(point[0], point[2],point[4])
+            bottom = sideToPoint(point[1], point[2], point[3])
+            up = sideToPoint(point[4], point[5], point[6])
+        }
+        class detectCols{
+            constructor(box2, huruf){
+                box = box2
+                this.huruf = huruf
+                thresh = 0.05
+            }
+
+            detect(){
+                var pos = this.huruf.position;
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(up, pos[i]) < thresh && dir[1] > 0) {
+                        dir[1] *= -1 
+                        rotater *= -1 
+                        return
+                    }
+                    if(distance(up, pos[i]) < thresh && dir[1] < 0) {
+                        return
+                    }
+                }
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(bottom, pos[i]) < thresh && dir[1] < 0) {
+                        dir[1] *= -1 
+                        rotater *= -1 
+                        return
+                    }
+                    if(distance(bottom, pos[i]) < thresh && dir[1] > 0) {
+                        return
+                    }
+                }
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(front, pos[i]) < thresh && dir[2] > 0) {
+                        dir[2] *= -1 
+                        rotater *= -1
+                        return
+                }
+                    if(distance(front, pos[i]) < thresh && dir[2] < 0) {
+                        return
+                    }
+                }
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(back, pos[i]) < thresh && dir[2] < 0) {
+                        dir[2] *= -1 
+                        rotater *= -1  
+                        return
+                    }
+                    if(distance(back, pos[i]) < thresh && dir[2] > 0) {
+                        return
+                    }
+                }
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(right, pos[i]) < thresh && dir[0] > 0) {
+                        dir[0] *= -1 
+                        rotater *= -1 
+                        return
+                    }
+                    if(distance(right, pos[i]) < thresh && dir[0] < 0) {
+                        return
+                    }
+                }
+                for(var i = 0; i < pos.length; i++){
+                    if(distance(left, pos[i]) < thresh && dir[0] < 0) {
+                        dir[0] *= -1
+                        rotater *= -1 
+                        return
+                    }
+                    if(distance(left, pos[i]) < thresh && dir[0] < 0) {
+                        return
+                    }
+                }
+            }
+        }
+        initGL()
+        var cratesCube = new BoxGeo(25, 25, 25, 2)
+        cratesCube.rotation.y = 135
+        cratesCube.rotation.x = 90
+        cratesCube.textureSrc = 'Crate.jpg'
+        for(var i = 0; i < 6; i+=cratesCube.step){
+            cratesCube.textureCoord.push(0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0)
+        }
+        cratesCube.action = () => {}
+        cratesCube.temporaryMatrixWorld = cratesCube.matrixWorld
+        document.addEventListener(cratesCube.id, cratesCube.action.bind(cratesCube))
+        createModel(cratesCube)
+        var hurufI = new huruf()
+        hurufI.rotation.y = 45
+        hurufI.action = () => {
+            hurufI.matrixWorld = Object.assign({},hurufI.temporaryMatrixWorld)
+            hurufI.move.vector([window.dir[0]*0.1, window.dir[1]*0.1, window.dir[2]*0.1])
+            hurufI.rotation.y += window.rotater*0.5
+            hurufI.translate.mat = [-1.5, -3.0, -0.5]
+        };
+        hurufI.temporaryMatrixWorld = Object.assign({}, hurufI.matrixWorld);
+        document.addEventListener(hurufI.id, hurufI.action.bind(hurufI));
+        createModel(hurufI)
+        var ambientLight = new AmbientLight(new Color("0xffffff"));
+        createModel(ambientLight)
+        var pointLight = new PointLight(new Color("0xd76985"), {x:0, y:5, z:-35})
+        createModel(pointLight)
+        function tick(){
+            requestAnimationFrame(tick)
+            drawScene()
+        }
+        document.addEventListener('after', function(){
+            var collision = new detectCols(cratesCube, hurufI)
+            addCols()
+            collision.detect()
+        });
+
+        document.addEventListener('point-light', function(){
+            var center = getCenter(hurufI)
+            pointLight.position.x = center[0]
+            pointLight.position.y = center[1]
+            pointLight.position.z = center[2]
+        })
+        tick()
+        var eventRightClick = new CustomEvent('right-click');
+        var drag = false;
+        var old_x, old_y;
+        var dX = 0, dY = 0;
+        var theta = 0, phi = 0;
+
+        var mouseDown = function(e) {
+        if(e.which === 1){
+            drag = true;
+            old_x = e.pageX, old_y = e.pageY;
+            e.preventDefault();
+            return false;
+        } else if (e.which === 3){
+            e.preventDefault();
+            document.dispatchEvent(eventRightClick);
+        }
+        };
+
+        var mouseUp = function(e){
+            if(e.which ===  1){
+                drag = false
+            }
+        };
+
+        var mouseMove = function(e) {
+            if(e.which === 1){
+                if (!drag) return false;
+                dX = (e.pageX-old_x)*2*Math.PI/gl.viewportWidth/2,
+                dY = (e.pageY-old_y)*2*Math.PI/gl.viewportHeight/2;
+                theta+= dX;
+                phi+=dY;
+                old_x = e.pageX, old_y = e.pageY;
+                e.preventDefault();
+            }
+        };
+        document.addEventListener("mouseout", mouseUp, false);
+        document.addEventListener("mousemove", mouseMove, false);
+        document.addEventListener("mousedown", mouseDown, false);
+        document.addEventListener("mouseup", mouseUp, false);
+        window.oncontextmenu = function (){
+        return false;
+        }
+
+        function initGL(){
+            var canvas = document.getElementById('mycanvas')
+            gl = canvas.getContext('webgl')
+            gl.viewportWidth = canvas.width
+            gl.viewportHeight = canvas.height            
+            initShaders = initShaders.bind(this)
+            initShaders()
+            gl.clearColor(0.0, 0.0, 0.0, 1.0)
+            gl.enable(gl.DEPTH_TEST)
+        }
+    </script>
+</body>
+</html>
